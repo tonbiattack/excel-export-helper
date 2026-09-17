@@ -18,7 +18,11 @@ function Test-SupportedInputFile {
 function ConvertTo-SafeFileName {
     param([Parameter(Mandatory)][string] $Name)
 
-    return ($Name -replace '[\\/:*?"<>|]', '_')
+    $safeName = $Name -replace '[\\/:*?"<>|]', '_'
+    if ($safeName -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$') {
+        $safeName = '_' + $safeName
+    }
+    return $safeName
 }
 
 function Get-UniqueSheetFileStem {
@@ -120,11 +124,12 @@ function Export-WorksheetsToTsv {
             Write-Info "Exporting TSV: $($fileStem).tsv"
         }
         finally {
-            if ($temporaryWorkbook) {
-                $temporaryWorkbook.Close($false)
+            try { if ($temporaryWorkbook) { $temporaryWorkbook.Close($false) } }
+            catch { Write-Verbose 'Failed to close temporary workbook.' }
+            finally {
+                try { Release-ComObject $temporaryWorkbook }
+                finally { Release-ComObject $worksheet }
             }
-            Release-ComObject $temporaryWorkbook
-            Release-ComObject $worksheet
         }
     }
 }
@@ -159,12 +164,16 @@ function Export-Workbook {
         }
     }
     finally {
-        if ($workbook) { $workbook.Close($false) }
-        if ($excel) { $excel.Quit() }
-        Release-ComObject $workbook
-        Release-ComObject $excel
-        [GC]::Collect()
-        [GC]::WaitForPendingFinalizers()
+        try { if ($workbook) { $workbook.Close($false) } }
+        catch { Write-Verbose 'Failed to close source workbook.' }
+        finally {
+            try { if ($excel) { $excel.Quit() } }
+            catch { Write-Verbose 'Failed to quit Excel.' }
+            finally {
+                try { Release-ComObject $workbook }
+                finally { Release-ComObject $excel; [GC]::Collect(); [GC]::WaitForPendingFinalizers() }
+            }
+        }
     }
 }
 
@@ -172,6 +181,7 @@ if ($NoRun) {
     return
 }
 
+$conversionStarted = $false
 try {
     if ([string]::IsNullOrWhiteSpace($Path)) {
         throw [System.ArgumentException]::new('Input path is required.')
@@ -182,6 +192,7 @@ try {
 
     $request = Resolve-ExportRequest $Path $Format $OutputDirectory
     Write-Info "Opening: $([System.IO.Path]::GetFileName($request.InputPath))"
+    $conversionStarted = $true
     Export-Workbook $request
     Write-Info 'Done.'
     exit 0
@@ -195,6 +206,10 @@ catch [System.InvalidOperationException] {
     exit 3
 }
 catch {
-    Write-Error "ERROR: Failed to convert workbook. $($_.Exception.Message)"
-    exit 4
+    if ($conversionStarted) {
+        Write-Error "ERROR: Failed to convert workbook. $($_.Exception.Message)"
+        exit 4
+    }
+    Write-Error "ERROR: $($_.Exception.Message)"
+    exit 1
 }
