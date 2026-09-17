@@ -56,4 +56,8 @@ Describe 'Excel Export Helper validation helpers' {
         }
         $threw | Should Be $true
     }
+
+    It 'exposes the COM cleanup helper' {
+        Get-Command Release-ComObject -ErrorAction Stop | Should Not BeNullOrEmpty
+    }
 }
